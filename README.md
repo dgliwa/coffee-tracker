@@ -83,3 +83,7 @@ The agent should translate requests like these into calls to the tools above:
 - "What were my best shots with this coffee?"
 
 Coffee Tracker intentionally provides no dialing rules, recommendations, embeddings, semantic search, external APIs, or conversational layer.
+
+## License
+
+[MIT](LICENSE) © 2026 Derek Gliwa
