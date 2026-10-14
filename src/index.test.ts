@@ -8,16 +8,26 @@ import { CoffeeRepository } from "./repository.js";
 
 const TOOL_NAMES = [
   "coffee_add_bean",
+  "coffee_add_coffee",
+  "coffee_add_bag",
+  "coffee_list_coffees",
+  "coffee_list_bags",
   "coffee_list_beans",
+  "coffee_update_coffee",
+  "coffee_update_bag",
   "coffee_set_current_bean",
   "coffee_get_current_bean",
+  "coffee_unset_current_bean",
   "coffee_log_brew",
+  "coffee_update_brew",
+  "coffee_delete_brew",
   "coffee_get_recent_brews",
   "coffee_search_brews",
+  "coffee_get_brew_summary",
 ];
 
 describe("coffee-tracker metadata", () => {
-  it("declares the Coffee Tracker tools", () => {
+  it("declares the full tool surface", () => {
     expect(getToolPluginMetadata(entry)?.tools.map((tool) => tool.name)).toEqual(TOOL_NAMES);
   });
 });
@@ -30,7 +40,7 @@ describe("CoffeeRepository", () => {
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "coffee-tracker-"));
     databasePath = join(directory, "test.sqlite");
-    repository = new CoffeeRepository(databasePath);
+    repository = new CoffeeRepository(databasePath, "America/Chicago");
   });
 
   afterEach(() => {
@@ -38,125 +48,135 @@ describe("CoffeeRepository", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  const addBean = (name = "Geometry") => repository.addBean({
+  const addBag = (name = "Geometry") => repository.addBean({
     roaster: "Onyx",
     name,
     origin: "Ethiopia",
+    roast_date: "2026-09-15",
     opened_date: "2026-09-20",
+    size_g: 340,
   });
 
-  it("creates and returns a bean", () => {
-    const bean = addBean();
-    expect(bean).toMatchObject({ id: 1, roaster: "Onyx", name: "Geometry", origin: "Ethiopia" });
-    expect(bean.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  it("separates reusable coffee identity from physical bags", () => {
+    const coffee = repository.addCoffee({ roaster: "Onyx", name: "Geometry", origin: "Ethiopia" });
+    const first = repository.addBag({ coffee_id: coffee.id, roast_date: "2026-09-01", size_g: 340 });
+    const second = repository.addBag({ coffee_id: coffee.id, roast_date: "2026-10-01", size_g: 340 });
+
+    expect(repository.listCoffees()).toHaveLength(1);
+    expect(repository.listBags({ coffee_id: coffee.id }).map(({ id }) => id)).toEqual([second.id, first.id]);
+    expect(first.coffee).toMatchObject({ id: coffee.id, name: "Geometry" });
   });
 
-  it("lists beans newest first with a bounded limit", () => {
-    addBean("First");
-    addBean("Second");
-    expect(repository.listBeans({ limit: 1 }).map((bean) => bean.name)).toEqual(["Second"]);
+  it("keeps coffee_add_bean as a coffee-and-bag convenience", () => {
+    const bag = addBag();
+    expect(bag).toMatchObject({
+      id: 1,
+      coffee_id: 1,
+      opened_date: "2026-09-20",
+      coffee: { roaster: "Onyx", name: "Geometry" },
+    });
   });
 
-  it("sets and gets the current espresso bean", () => {
-    const bean = addBean();
-    expect(repository.setCurrentBean(bean.id, "espresso")).toEqual({ context: "espresso", bean });
-    expect(repository.getCurrentBean("espresso")).toEqual({ context: "espresso", configured: true, bean });
-    expect(repository.listBeans({ context: "espresso" })).toEqual([bean]);
+  it("updates coffee and bag fields, including explicit clearing", () => {
+    const bag = addBag();
+    expect(repository.updateCoffee(bag.coffee_id, { origin: "Kenya", process: "washed" }))
+      .toMatchObject({ origin: "Kenya", process: "washed" });
+    expect(repository.updateBag(bag.id, { finished_date: "2026-10-01", size_g: null }))
+      .toMatchObject({ finished_date: "2026-10-01", size_g: null });
+    expect(repository.listBags()).toEqual([]);
+    expect(repository.listBags({ include_finished: true })).toHaveLength(1);
   });
 
-  it("sets and gets the current filter bean independently", () => {
-    const espresso = addBean("Espresso");
-    const filter = addBean("Filter");
+  it("sets, resolves, and unsets current bags independently", () => {
+    const espresso = addBag("Espresso");
+    const filter = addBag("Filter");
     repository.setCurrentBean(espresso.id, "espresso");
     repository.setCurrentBean(filter.id, "filter");
-    expect(repository.getCurrentBean("filter").bean?.id).toBe(filter.id);
-    expect(repository.getCurrentBean("espresso").bean?.id).toBe(espresso.id);
+    expect(repository.getCurrentBean("espresso").bag?.id).toBe(espresso.id);
+    expect(repository.getCurrentBean("filter").bag?.id).toBe(filter.id);
+    expect(repository.unsetCurrentBean("espresso")).toEqual({ context: "espresso", configured: false, bag: null });
+    expect(repository.getCurrentBean("espresso").configured).toBe(false);
   });
 
-  it("logs a brew with an explicit bean and derives espresso ratio", () => {
-    const bean = addBean();
-    const brew = repository.logBrew({
-      bean_id: bean.id,
-      timestamp: "2026-09-21T08:30:00Z",
+  it("logs, corrects, summarizes, and deletes brews", () => {
+    const bag = addBag();
+    const first = repository.logBrew({
+      bag_id: bag.id,
       drink_type: "espresso",
+      timestamp: "2026-09-21T08:30:00-05:00",
       dose_g: 18,
       yield_g: 40,
+      brew_time_seconds: 28,
       grind_setting: "4.3",
-      rating: 4,
+      rating: 3,
     });
-    expect(brew).toMatchObject({ bean_id: bean.id, grind_setting: "4.3", brew_ratio: 2.22 });
-    expect(brew.bean).toMatchObject({ id: bean.id, name: "Geometry" });
-  });
-
-  it("logs a brew using the current bean", () => {
-    const bean = addBean();
-    repository.setCurrentBean(bean.id, "espresso");
-    expect(repository.logBrew({ context: "espresso", drink_type: "espresso" }).bean_id).toBe(bean.id);
-  });
-
-  it("retrieves recent brews newest first and includes bean details", () => {
-    const bean = addBean();
-    repository.logBrew({ bean_id: bean.id, drink_type: "espresso", timestamp: "2026-09-20T08:00:00Z" });
-    repository.logBrew({ bean_id: bean.id, drink_type: "espresso", timestamp: "2026-09-21T08:00:00Z" });
-    const brews = repository.getRecentBrews({ bean_id: bean.id, limit: 1 });
-    expect(brews).toHaveLength(1);
-    expect(brews[0]?.timestamp).toBe("2026-09-21T08:00:00.000Z");
-    expect(brews[0]?.bean.name).toBe("Geometry");
-  });
-
-  it("filters brew history by bean, drink type, date, and rating", () => {
-    const selected = addBean("Selected");
-    const other = addBean("Other");
-    repository.logBrew({ bean_id: selected.id, drink_type: "espresso", timestamp: "2026-09-20T08:00:00Z", rating: 3 });
-    const expected = repository.logBrew({ bean_id: selected.id, drink_type: "espresso", timestamp: "2026-09-21T08:00:00Z", rating: 5 });
-    repository.logBrew({ bean_id: selected.id, drink_type: "pour_over", timestamp: "2026-09-21T09:00:00Z", rating: 5 });
-    repository.logBrew({ bean_id: other.id, drink_type: "espresso", timestamp: "2026-09-21T10:00:00Z", rating: 5 });
-
-    expect(repository.searchBrews({
-      bean_id: selected.id,
+    repository.logBrew({
+      bag_id: bag.id,
       drink_type: "espresso",
-      start_date: "2026-09-21",
-      end_date: "2026-09-21",
-      minimum_rating: 4,
-    }).map((brew) => brew.id)).toEqual([expected.id]);
-  });
+      timestamp: "2026-09-22T08:30:00-05:00",
+      dose_g: 18,
+      yield_g: 36,
+      brew_time_seconds: 30,
+      rating: 5,
+    });
 
-  it("persists records and current selections across reconnection", () => {
-    const bean = addBean();
-    repository.setCurrentBean(bean.id, "filter");
-    repository.logBrew({ bean_id: bean.id, drink_type: "pour_over" });
-    repository.close();
-
-    repository = new CoffeeRepository(databasePath);
-    expect(repository.listBeans()).toHaveLength(1);
-    expect(repository.getCurrentBean("filter").bean?.id).toBe(bean.id);
+    const corrected = repository.updateBrew(first.id, { rating: 4, notes: "Balanced", water_temp_c: null });
+    expect(corrected).toMatchObject({ rating: 4, notes: "Balanced", brew_ratio: 2.22 });
+    expect(repository.getBrewSummary({ bag_id: bag.id })).toMatchObject({
+      brew_count: 2,
+      average_dose_g: 18,
+      average_yield_g: 38,
+      average_rating: 4.5,
+      best_rated_brew: { rating: 5 },
+    });
+    expect(repository.deleteBrew(first.id)).toEqual({ deleted: true, brew_id: first.id });
     expect(repository.getRecentBrews()).toHaveLength(1);
   });
 
-  it("rejects invalid bean references", () => {
-    expect(() => repository.setCurrentBean(999, "espresso")).toThrow("unknown bean ID: 999");
-    expect(() => repository.logBrew({ bean_id: 999, drink_type: "espresso" })).toThrow("unknown bean ID: 999");
+  it("uses the configured timezone for date-only searches", () => {
+    const bag = addBag();
+    const localLate = repository.logBrew({
+      bag_id: bag.id,
+      drink_type: "espresso",
+      timestamp: "2026-09-21T00:30:00-05:00",
+    });
+    repository.logBrew({
+      bag_id: bag.id,
+      drink_type: "espresso",
+      timestamp: "2026-09-20T23:30:00-05:00",
+    });
+    expect(repository.searchBrews({ start_date: "2026-09-21", end_date: "2026-09-21" })
+      .map(({ id }) => id)).toEqual([localLate.id]);
   });
 
-  it("returns none for an unset current bean and rejects resolution through it", () => {
-    expect(repository.getCurrentBean("espresso")).toEqual({ context: "espresso", configured: false, bean: null });
-    expect(() => repository.logBrew({ context: "espresso", drink_type: "espresso" })).toThrow(
-      "no current espresso bean configured",
-    );
+  it("paginates brews with a stable cursor", () => {
+    const bag = addBag();
+    repository.logBrew({ bag_id: bag.id, drink_type: "espresso", timestamp: "2026-09-20T08:00:00Z" });
+    const middle = repository.logBrew({ bag_id: bag.id, drink_type: "espresso", timestamp: "2026-09-21T08:00:00Z" });
+    repository.logBrew({ bag_id: bag.id, drink_type: "espresso", timestamp: "2026-09-22T08:00:00Z" });
+    expect(repository.getRecentBrews({ before_brew_id: middle.id }).map(({ timestamp }) => timestamp))
+      .toEqual(["2026-09-20T08:00:00.000Z"]);
   });
 
-  it("validates required text, dates, positive measurements, ratings, and missing bean selection", () => {
-    expect(() => repository.addBean({ roaster: " ", name: "Coffee" })).toThrow("roaster must not be blank");
-    expect(() => repository.addBean({ roaster: "Onyx", name: "Coffee", roast_date: "2026-02-30" })).toThrow(
-      "roast_date is not a valid calendar date",
-    );
-    const bean = addBean();
-    expect(() => repository.logBrew({ bean_id: bean.id, drink_type: "espresso", dose_g: -1 })).toThrow(
-      "dose_g must be greater than zero",
-    );
-    expect(() => repository.logBrew({ bean_id: bean.id, drink_type: "espresso", rating: 6 })).toThrow(
-      "rating must be an integer from 1 to 5",
-    );
-    expect(() => repository.logBrew({ drink_type: "espresso" })).toThrow("bean_id is required");
+  it("persists migrated records and selections across reconnect", () => {
+    const bag = addBag();
+    repository.setCurrentBean(bag.id, "filter");
+    repository.logBrew({ bag_id: bag.id, drink_type: "pour_over" });
+    repository.close();
+    repository = new CoffeeRepository(databasePath, "America/Chicago");
+    expect(repository.listCoffees()).toHaveLength(1);
+    expect(repository.listBags()).toHaveLength(1);
+    expect(repository.getCurrentBean("filter").bag?.id).toBe(bag.id);
+    expect(repository.getRecentBrews()).toHaveLength(1);
+  });
+
+  it("rejects invalid references and measurements", () => {
+    expect(() => repository.addBag({ coffee_id: 999 })).toThrow("unknown coffee ID");
+    expect(() => repository.logBrew({ bag_id: 999, drink_type: "espresso" })).toThrow("unknown bag ID");
+    const bag = addBag();
+    expect(() => repository.logBrew({ bag_id: bag.id, drink_type: "espresso", dose_g: -1 }))
+      .toThrow("greater than zero");
+    expect(() => repository.logBrew({ bag_id: bag.id, drink_type: "espresso", rating: 6 }))
+      .toThrow("1 to 5");
   });
 });

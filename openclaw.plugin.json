@@ -1,11 +1,16 @@
 {
   "id": "coffee-tracker",
   "name": "Coffee Tracker",
-  "description": "Persist and query a local coffee bean and brew journal.",
+  "description": "Persist and query a local coffee, bag, and brew journal.",
   "version": "0.1.0",
   "configSchema": {
     "type": "object",
-    "properties": {},
+    "properties": {
+      "timezone": {
+        "type": "string",
+        "description": "IANA timezone used for date-only brew searches, such as America/Chicago."
+      }
+    },
     "additionalProperties": false
   },
   "activation": {
@@ -14,12 +19,22 @@
   "contracts": {
     "tools": [
       "coffee_add_bean",
+      "coffee_add_coffee",
+      "coffee_add_bag",
+      "coffee_list_coffees",
+      "coffee_list_bags",
       "coffee_list_beans",
+      "coffee_update_coffee",
+      "coffee_update_bag",
       "coffee_set_current_bean",
       "coffee_get_current_bean",
+      "coffee_unset_current_bean",
       "coffee_log_brew",
+      "coffee_update_brew",
+      "coffee_delete_brew",
       "coffee_get_recent_brews",
-      "coffee_search_brews"
+      "coffee_search_brews",
+      "coffee_get_brew_summary"
     ]
   }
 }
