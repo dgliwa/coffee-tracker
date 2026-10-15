@@ -64,6 +64,47 @@ export interface BrewWithBag extends Brew {
   brew_ratio: number | null;
 }
 
+export interface BrewPhoto {
+  id: number;
+  brew_id: number;
+  relative_path: string;
+  thumbnail_relative_path: string;
+  original_filename: string;
+  mime_type: "image/jpeg" | "image/png" | "image/webp";
+  byte_size: number;
+  sha256: string;
+  width: number;
+  height: number;
+  caption: string | null;
+  captured_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BrewPhotoWithPaths extends BrewPhoto {
+  file_path: string;
+  thumbnail_file_path: string;
+}
+
+export interface AddBrewPhotoRecord {
+  brew_id: number;
+  relative_path: string;
+  thumbnail_relative_path: string;
+  original_filename: string;
+  mime_type: BrewPhoto["mime_type"];
+  byte_size: number;
+  sha256: string;
+  width: number;
+  height: number;
+  caption?: string;
+  captured_at?: string;
+}
+
+export interface UpdateBrewPhotoInput {
+  caption?: string | null;
+  captured_at?: string;
+}
+
 export interface AddCoffeeInput {
   roaster: string;
   name: string;

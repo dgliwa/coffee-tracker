@@ -1,7 +1,7 @@
 {
   "id": "coffee-tracker",
   "name": "Coffee Tracker",
-  "description": "Persist and query a local coffee, bag, and brew journal.",
+  "description": "Persist and query a local coffee, bag, brew, and photo journal.",
   "version": "0.1.0",
   "configSchema": {
     "type": "object",
@@ -32,6 +32,10 @@
       "coffee_log_brew",
       "coffee_update_brew",
       "coffee_delete_brew",
+      "coffee_photo_add",
+      "coffee_photo_list",
+      "coffee_photo_update",
+      "coffee_photo_delete",
       "coffee_get_recent_brews",
       "coffee_search_brews",
       "coffee_get_brew_summary"

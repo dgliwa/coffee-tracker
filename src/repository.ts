@@ -4,6 +4,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import {
   type AddBagInput,
   type AddBeanInput,
+  type AddBrewPhotoRecord,
   type AddCoffeeInput,
   type Bag,
   type BagWithCoffee,
@@ -11,11 +12,13 @@ import {
   type BrewContext,
   type BrewFilters,
   type BrewWithBag,
+  type BrewPhoto,
   type Coffee,
   CoffeeValidationError,
   type LogBrewInput,
   type UpdateBagInput,
   type UpdateBrewInput,
+  type UpdateBrewPhotoInput,
   type UpdateCoffeeInput,
   normalizeDate,
   normalizeTimestamp,
@@ -147,6 +150,27 @@ const MIGRATIONS = [
     CREATE INDEX idx_brews_drink_type ON brews(drink_type);
     CREATE INDEX idx_brews_bag_timestamp ON brews(bag_id, timestamp DESC);
     CREATE INDEX idx_bags_coffee_id ON bags(coffee_id);
+  `,
+  `
+    CREATE TABLE brew_photos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      brew_id INTEGER NOT NULL REFERENCES brews(id) ON DELETE RESTRICT,
+      relative_path TEXT NOT NULL UNIQUE,
+      thumbnail_relative_path TEXT NOT NULL UNIQUE,
+      original_filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL CHECK(mime_type IN ('image/jpeg', 'image/png', 'image/webp')),
+      byte_size INTEGER NOT NULL CHECK(byte_size > 0),
+      sha256 TEXT NOT NULL,
+      width INTEGER NOT NULL CHECK(width > 0),
+      height INTEGER NOT NULL CHECK(height > 0),
+      caption TEXT,
+      captured_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(brew_id, sha256)
+    );
+    CREATE INDEX idx_brew_photos_brew_id ON brew_photos(brew_id, id DESC);
+    CREATE INDEX idx_brew_photos_captured_at ON brew_photos(captured_at DESC, id DESC);
   `,
 ];
 
@@ -466,8 +490,95 @@ export class CoffeeRepository {
     return this.getBrew(brewId);
   }
 
+  addBrewPhoto(input: AddBrewPhotoRecord): BrewPhoto {
+    const brew = this.getBrew(input.brew_id);
+    const now = new Date().toISOString();
+    const result = this.db.prepare(`
+      INSERT INTO brew_photos(
+        brew_id, relative_path, thumbnail_relative_path, original_filename,
+        mime_type, byte_size, sha256, width, height, caption, captured_at,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.brew_id,
+      requireNonBlank(input.relative_path, "relative_path"),
+      requireNonBlank(input.thumbnail_relative_path, "thumbnail_relative_path"),
+      requireNonBlank(input.original_filename, "original_filename"),
+      input.mime_type,
+      input.byte_size,
+      requireNonBlank(input.sha256, "sha256"),
+      input.width,
+      input.height,
+      optionalText(input.caption, "caption"),
+      normalizeTimestamp(input.captured_at ?? brew.timestamp),
+      now,
+      now,
+    );
+    return this.getBrewPhoto(Number(result.lastInsertRowid));
+  }
+
+  getBrewPhoto(photoId: number): BrewPhoto {
+    this.validateId(photoId, "photo_id");
+    const row = this.db.prepare(`
+      SELECT id, brew_id, relative_path, thumbnail_relative_path, original_filename,
+             mime_type, byte_size, sha256, width, height, caption, captured_at,
+             created_at, updated_at
+      FROM brew_photos WHERE id = ?
+    `).get(photoId) as BrewPhoto | undefined;
+    if (!row) throw new CoffeeValidationError(`unknown photo ID: ${photoId}`);
+    return { ...row, byte_size: Number(row.byte_size), width: Number(row.width), height: Number(row.height) };
+  }
+
+  listBrewPhotos(options: { brew_id?: number; before_id?: number; limit?: number } = {}): BrewPhoto[] {
+    const clauses = ["id < ?"];
+    const params: SQLInputValue[] = [options.before_id ?? Number.MAX_SAFE_INTEGER];
+    if (options.before_id !== undefined) this.validateId(options.before_id, "before_id");
+    if (options.brew_id !== undefined) {
+      this.getBrew(options.brew_id);
+      clauses.push("brew_id = ?");
+      params.push(options.brew_id);
+    }
+    const rows = this.db.prepare(`
+      SELECT id, brew_id, relative_path, thumbnail_relative_path, original_filename,
+             mime_type, byte_size, sha256, width, height, caption, captured_at,
+             created_at, updated_at
+      FROM brew_photos WHERE ${clauses.join(" AND ")} ORDER BY id DESC LIMIT ?
+    `).all(...params, validateLimit(options.limit, 20)) as unknown as BrewPhoto[];
+    return rows.map((row) => ({
+      ...row,
+      byte_size: Number(row.byte_size),
+      width: Number(row.width),
+      height: Number(row.height),
+    }));
+  }
+
+  updateBrewPhoto(photoId: number, input: UpdateBrewPhotoInput): BrewPhoto {
+    const current = this.getBrewPhoto(photoId);
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE brew_photos SET caption = ?, captured_at = ?, updated_at = ? WHERE id = ?
+    `).run(
+      input.caption === undefined ? current.caption : nullableText(input.caption, "caption"),
+      input.captured_at === undefined ? current.captured_at : normalizeTimestamp(input.captured_at),
+      now,
+      photoId,
+    );
+    return this.getBrewPhoto(photoId);
+  }
+
+  deleteBrewPhoto(photoId: number): BrewPhoto {
+    const photo = this.getBrewPhoto(photoId);
+    this.db.prepare("DELETE FROM brew_photos WHERE id = ?").run(photoId);
+    return photo;
+  }
+
   deleteBrew(brewId: number): { deleted: true; brew_id: number } {
     this.getBrew(brewId);
+    const photoCount = this.db.prepare("SELECT COUNT(*) AS count FROM brew_photos WHERE brew_id = ?")
+      .get(brewId) as { count: number };
+    if (Number(photoCount.count) > 0) {
+      throw new CoffeeValidationError("delete attached brew photos before deleting this brew");
+    }
     this.db.prepare("DELETE FROM brews WHERE id = ?").run(brewId);
     return { deleted: true, brew_id: brewId };
   }

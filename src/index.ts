@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { BREW_CONTEXTS, DRINK_TYPES } from "./domain.js";
+import { BrewPhotoService } from "./photo-service.js";
 import { CoffeeRepository } from "./repository.js";
 
 const ContextSchema = Type.Union(
@@ -16,6 +17,7 @@ const IdSchema = (description: string) => Type.Integer({ minimum: 1, description
 const BagIdSchema = IdSchema("Numeric bag ID returned by Coffee Tracker.");
 const CoffeeIdSchema = IdSchema("Numeric reusable coffee identity ID returned by Coffee Tracker.");
 const BrewIdSchema = IdSchema("Numeric brew ID returned by Coffee Tracker.");
+const PhotoIdSchema = IdSchema("Numeric photo ID returned by Coffee Tracker.");
 const LimitSchema = Type.Integer({ minimum: 1, maximum: 100, description: "Maximum records to return (1–100)." });
 const RatingSchema = Type.Integer({ minimum: 1, maximum: 5, description: "Rating on a 1–5 scale." });
 const PositiveNumberSchema = (description: string) => Type.Number({ exclusiveMinimum: 0, description });
@@ -66,10 +68,24 @@ function withRepository<T>(
   }
 }
 
+async function withPhotoService<T>(
+  context: Parameters<typeof databasePath>[0],
+  timeZone: string | undefined,
+  operation: (service: BrewPhotoService) => Promise<T> | T,
+): Promise<T> {
+  const path = databasePath(context);
+  const repository = new CoffeeRepository(path, timeZone);
+  try {
+    return await operation(new BrewPhotoService(repository, path));
+  } finally {
+    repository.close();
+  }
+}
+
 export default defineToolPlugin({
   id: "coffee-tracker",
   name: "Coffee Tracker",
-  description: "Persist and query a local coffee, bag, and brew journal.",
+  description: "Persist and query a local coffee, bag, brew, and photo journal.",
   configSchema: Type.Object({
     timezone: Type.Optional(Type.String({ description: "IANA timezone used for date-only brew searches, such as America/Chicago." })),
   }, { additionalProperties: false }),
@@ -227,9 +243,50 @@ export default defineToolPlugin({
     tool({
       name: "coffee_delete_brew",
       label: "Delete Coffee Brew",
-      description: "Permanently delete one mistaken brew. Requires explicit confirmation.",
+      description: "Permanently delete one mistaken brew. Attached photos must be deleted first. Requires explicit confirmation.",
       parameters: Type.Object({ brew_id: BrewIdSchema, confirm_deletion: Type.Literal(true) }, { additionalProperties: false }),
       execute: ({ brew_id }, config, context) => withRepository(context, config.timezone, (repository) => repository.deleteBrew(brew_id)),
+    }),
+    tool({
+      name: "coffee_photo_add",
+      label: "Attach Brew Photo",
+      description: "Attach a staged local JPEG, PNG, or WebP image to a brew. The managed copy is orientation-corrected, metadata-stripped, and accompanied by a thumbnail.",
+      parameters: Type.Object({
+        brew_id: BrewIdSchema,
+        source_path: Type.String({ minLength: 1, description: "Absolute or working-directory-relative path to the uploaded image file." }),
+        caption: Type.Optional(Type.String({ minLength: 1 })),
+        captured_at: Type.Optional(Type.String({ description: "ISO 8601 capture timestamp; defaults to the brew timestamp." })),
+      }, { additionalProperties: false }),
+      execute: (params, config, context) => withPhotoService(context, config.timezone, (service) => service.add(params)),
+    }),
+    tool({
+      name: "coffee_photo_list",
+      label: "List Brew Photos",
+      description: "List managed brew photos newest first, optionally for one brew, including full image and thumbnail paths.",
+      parameters: Type.Object({
+        brew_id: Type.Optional(BrewIdSchema),
+        before_id: Type.Optional(PhotoIdSchema),
+        limit: Type.Optional(LimitSchema),
+      }, { additionalProperties: false }),
+      execute: (params, config, context) => withPhotoService(context, config.timezone, (service) => ({ photos: service.list(params) })),
+    }),
+    tool({
+      name: "coffee_photo_update",
+      label: "Update Brew Photo",
+      description: "Correct a photo caption or capture timestamp. Null clears the caption.",
+      parameters: Type.Object({
+        photo_id: PhotoIdSchema,
+        caption: Type.Optional(NullableTextSchema("Photo caption; null clears it.")),
+        captured_at: Type.Optional(Type.String({ description: "ISO 8601 capture timestamp." })),
+      }, { additionalProperties: false }),
+      execute: ({ photo_id, ...params }, config, context) => withPhotoService(context, config.timezone, (service) => service.update(photo_id, params)),
+    }),
+    tool({
+      name: "coffee_photo_delete",
+      label: "Delete Brew Photo",
+      description: "Permanently delete a managed photo, its thumbnail, and metadata. Requires explicit confirmation.",
+      parameters: Type.Object({ photo_id: PhotoIdSchema, confirm_deletion: Type.Literal(true) }, { additionalProperties: false }),
+      execute: ({ photo_id }, config, context) => withPhotoService(context, config.timezone, (service) => service.delete(photo_id)),
     }),
     tool({
       name: "coffee_get_recent_brews",

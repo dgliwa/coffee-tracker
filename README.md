@@ -1,12 +1,13 @@
 # Coffee Tracker
 
-Coffee Tracker is a local-first coffee journal for OpenClaw. It stores reusable coffee identities, physical bags, current espresso/filter selections, and individual brews in SQLite. Natural-language interpretation remains the agent's job; the plugin provides deterministic storage, correction, search, pagination, and summaries.
+Coffee Tracker is a local-first coffee journal for OpenClaw. It stores reusable coffee identities, physical bags, current espresso/filter selections, individual brews, and brew photos. Natural-language interpretation remains the agent's job; the plugin provides deterministic storage, correction, search, pagination, and summaries.
 
 ## Data model
 
 - **Coffee** — reusable identity: roaster, name, origin, process, notes.
 - **Bag** — one purchase of a coffee: roast/open/finish dates, original size, notes.
 - **Brew** — one preparation tied to a physical bag.
+- **Brew photo** — one managed image and thumbnail tied to a brew.
 
 `coffee_add_bean` remains a convenience tool that creates a coffee and its first bag together. Existing v1 databases migrate automatically: each legacy bean becomes one coffee and one bag, with existing brews and current selections preserved.
 
@@ -33,11 +34,31 @@ The database is stored at:
 - `coffee_unset_current_bean` — clear a context selection
 - `coffee_log_brew` — record a brew by bag or current context
 - `coffee_update_brew` — correct measurements, timestamp, bag, rating, or notes
-- `coffee_delete_brew` — delete a mistaken brew with explicit confirmation
+- `coffee_delete_brew` — delete a mistaken brew with explicit confirmation; attached photos must be removed first
+- `coffee_photo_add` — attach a staged local JPEG, PNG, or WebP image to a brew
+- `coffee_photo_list` — list photos, optionally for one brew, with managed image and thumbnail paths
+- `coffee_photo_update` — correct a caption or capture timestamp
+- `coffee_photo_delete` — permanently remove a managed image, thumbnail, and metadata with explicit confirmation
 - `coffee_get_recent_brews` / `coffee_search_brews` — query history with cursor pagination
 - `coffee_get_brew_summary` — deterministic averages and best-rated brew
 
 Ratings are integers from 1–5. Measurements must be positive. Optional update fields accept `null` to clear them.
+
+## Photo storage
+
+Photo metadata and brew relationships are stored in SQLite. Managed files live beside the database:
+
+```text
+<OpenClaw state directory>/plugins/coffee-tracker/
+├── coffee-tracker.sqlite
+└── photos/YYYY/MM/
+    ├── <photo-id>.jpg|png|webp
+    └── <photo-id>-thumb.webp
+```
+
+`coffee_photo_add` accepts an existing local attachment path up to 25 MB. It validates the file as JPEG, PNG, or WebP, applies encoded orientation, re-encodes the managed image without EXIF metadata, creates a maximum 512×512 WebP thumbnail, and stores files with restrictive permissions. The source upload is not modified or deleted.
+
+Photo records retain the original filename, MIME type, dimensions, byte size, SHA-256 digest, caption, and capture timestamp. Capture time defaults to the brew timestamp. Backups should include both `coffee-tracker.sqlite` and the `photos/` directory.
 
 ## Timezone behavior
 
