@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { chmod, lstat, mkdir, rename, stat, unlink } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
-import sharp, { type Metadata } from "sharp";
+import type { Metadata } from "sharp";
 import {
   CoffeeValidationError,
   type BrewPhoto,
@@ -14,6 +15,33 @@ import { CoffeeRepository } from "./repository.js";
 const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
 const MAX_MANAGED_BYTES = 50 * 1024 * 1024;
 const MAX_INPUT_PIXELS = 80_000_000;
+const require = createRequire(import.meta.url);
+let sharpModule: Promise<typeof import("sharp")> | undefined;
+
+function loadSharp(): Promise<typeof import("sharp")> {
+  if (!sharpModule) {
+    if (process.platform === "linux") {
+      const packageNames = [
+        `@img/sharp-libvips-linux-${process.arch}`,
+        `@img/sharp-libvips-linuxmusl-${process.arch}`,
+      ];
+      for (const packageName of packageNames) {
+        try {
+          const packagePath = require.resolve(`${packageName}/package.json`);
+          const libraryPath = join(dirname(packagePath), "lib");
+          process.env.LD_LIBRARY_PATH = [libraryPath, process.env.LD_LIBRARY_PATH]
+            .filter(Boolean)
+            .join(":");
+          break;
+        } catch {
+          // Try the next libc/platform package name.
+        }
+      }
+    }
+    sharpModule = import("sharp");
+  }
+  return sharpModule;
+}
 
 async function removeIfPresent(path: string): Promise<void> {
   try {
@@ -65,6 +93,7 @@ export class BrewPhotoService {
       throw new CoffeeValidationError("photo must be between 1 byte and 25 MB");
     }
 
+    const { default: sharp } = await loadSharp();
     let metadata: Metadata;
     try {
       metadata = await sharp(sourcePath, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
