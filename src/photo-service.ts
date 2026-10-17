@@ -28,13 +28,14 @@ function loadSharp(): Promise<typeof import("sharp")> {
 }
 
 function preloadLibvips(): void {
+  const sharpRequire = createRequire(require.resolve("sharp"));
   const packageNames = [
     `@img/sharp-libvips-linux-${process.arch}`,
     `@img/sharp-libvips-linuxmusl-${process.arch}`,
   ];
   for (const packageName of packageNames) {
     try {
-      const packagePath = require.resolve(`${packageName}/package.json`);
+      const packagePath = sharpRequire.resolve(`${packageName}/package.json`);
       const libraryPath = join(dirname(packagePath), "lib");
       const libraryName = readdirSync(libraryPath).find(name => name.startsWith("libvips-cpp.so."));
       if (!libraryName) continue;
