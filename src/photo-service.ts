@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, readdirSync } from "node:fs";
 import { chmod, lstat, mkdir, rename, stat, unlink } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { constants as osConstants } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Metadata } from "sharp";
 import {
@@ -20,27 +21,37 @@ let sharpModule: Promise<typeof import("sharp")> | undefined;
 
 function loadSharp(): Promise<typeof import("sharp")> {
   if (!sharpModule) {
-    if (process.platform === "linux") {
-      const packageNames = [
-        `@img/sharp-libvips-linux-${process.arch}`,
-        `@img/sharp-libvips-linuxmusl-${process.arch}`,
-      ];
-      for (const packageName of packageNames) {
-        try {
-          const packagePath = require.resolve(`${packageName}/package.json`);
-          const libraryPath = join(dirname(packagePath), "lib");
-          process.env.LD_LIBRARY_PATH = [libraryPath, process.env.LD_LIBRARY_PATH]
-            .filter(Boolean)
-            .join(":");
-          break;
-        } catch {
-          // Try the next libc/platform package name.
-        }
-      }
-    }
+    if (process.platform === "linux") preloadLibvips();
     sharpModule = import("sharp");
   }
   return sharpModule;
+}
+
+function preloadLibvips(): void {
+  const packageNames = [
+    `@img/sharp-libvips-linux-${process.arch}`,
+    `@img/sharp-libvips-linuxmusl-${process.arch}`,
+  ];
+  for (const packageName of packageNames) {
+    try {
+      const packagePath = require.resolve(`${packageName}/package.json`);
+      const libraryPath = join(dirname(packagePath), "lib");
+      const libraryName = readdirSync(libraryPath).find(name => name.startsWith("libvips-cpp.so."));
+      if (!libraryName) continue;
+      try {
+        process.dlopen(
+          { exports: {} },
+          join(libraryPath, libraryName),
+          osConstants.dlopen.RTLD_NOW | osConstants.dlopen.RTLD_GLOBAL,
+        );
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("Module did not self-register")) throw error;
+      }
+      return;
+    } catch {
+      // Try the next libc/platform package name. Sharp will report a detailed error if none load.
+    }
+  }
 }
 
 async function removeIfPresent(path: string): Promise<void> {
