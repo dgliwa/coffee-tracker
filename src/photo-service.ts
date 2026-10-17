@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream, readdirSync } from "node:fs";
+import { createReadStream } from "node:fs";
 import { chmod, lstat, mkdir, rename, stat, unlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
@@ -35,14 +35,11 @@ function preloadLibvips(): void {
   ];
   for (const packageName of packageNames) {
     try {
-      const packagePath = sharpRequire.resolve(`${packageName}/package.json`);
-      const libraryPath = join(dirname(packagePath), "lib");
-      const libraryName = readdirSync(libraryPath).find(name => name.startsWith("libvips-cpp.so."));
-      if (!libraryName) continue;
+      const libraryPath = sharpRequire.resolve(`${packageName}/binary`);
       try {
         process.dlopen(
           { exports: {} },
-          join(libraryPath, libraryName),
+          libraryPath,
           osConstants.dlopen.RTLD_NOW | osConstants.dlopen.RTLD_GLOBAL,
         );
       } catch (error) {
