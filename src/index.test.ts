@@ -137,6 +137,41 @@ describe("CoffeeRepository", () => {
     expect(repository.getRecentBrews()).toHaveLength(1);
   });
 
+  it("stores structured feedback and explicit inference provenance", () => {
+    const bag = addBag();
+    const brew = repository.logBrew({
+      bag_id: bag.id,
+      drink_type: "latte",
+      dose_g: 18,
+      yield_g: 36,
+      taste_balance: "balanced",
+      body_level: "good",
+      milk_texture: "thick",
+      art_rating: 3,
+      provenance: {
+        dose_g: { kind: "reported" },
+        yield_g: { kind: "inferred", note: "Inherited from the prior recipe; please correct if different." },
+      },
+    });
+    expect(brew).toMatchObject({
+      taste_balance: "balanced",
+      body_level: "good",
+      milk_texture: "thick",
+      art_rating: 3,
+      provenance: { yield_g: { kind: "inferred" } },
+    });
+    expect(repository.getBrewSummary({ bag_id: bag.id })).toMatchObject({
+      average_art_rating: 3,
+      taste_counts: { balanced: 1 },
+      milk_texture_counts: { thick: 1 },
+      provenance_counts: { reported: 1, inferred: 1 },
+    });
+    expect(repository.updateBrew(brew.id, { milk_texture: "good", art_rating: 4 })).toMatchObject({
+      milk_texture: "good",
+      art_rating: 4,
+    });
+  });
+
   it("uses the configured timezone for date-only searches", () => {
     const bag = addBag();
     const localLate = repository.logBrew({
