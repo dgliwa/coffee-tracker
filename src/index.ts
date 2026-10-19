@@ -1,7 +1,14 @@
 import { join } from "node:path";
 import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
-import { BREW_CONTEXTS, DRINK_TYPES } from "./domain.js";
+import {
+  BODY_LEVELS,
+  BREW_CONTEXTS,
+  DRINK_TYPES,
+  MILK_TEXTURES,
+  PROVENANCE_KINDS,
+  TASTE_BALANCES,
+} from "./domain.js";
 import { BrewPhotoService } from "./photo-service.js";
 import { CoffeeRepository } from "./repository.js";
 
@@ -20,6 +27,14 @@ const BrewIdSchema = IdSchema("Numeric brew ID returned by Coffee Tracker.");
 const PhotoIdSchema = IdSchema("Numeric photo ID returned by Coffee Tracker.");
 const LimitSchema = Type.Integer({ minimum: 1, maximum: 100, description: "Maximum records to return (1–100)." });
 const RatingSchema = Type.Integer({ minimum: 1, maximum: 5, description: "Rating on a 1–5 scale." });
+const TasteBalanceSchema = Type.Union(TASTE_BALANCES.map((value) => Type.Literal(value)));
+const BodyLevelSchema = Type.Union(BODY_LEVELS.map((value) => Type.Literal(value)));
+const MilkTextureSchema = Type.Union(MILK_TEXTURES.map((value) => Type.Literal(value)));
+const ProvenanceKindSchema = Type.Union(PROVENANCE_KINDS.map((value) => Type.Literal(value)));
+const ProvenanceSchema = Type.Record(Type.String({ minLength: 1 }), Type.Object({
+  kind: ProvenanceKindSchema,
+  note: Type.Optional(Type.String({ minLength: 1, maxLength: 2_000 })),
+}, { additionalProperties: false }), { description: "Per-field provenance. Mark inferred or approximate values explicitly and explain the basis in note." });
 const PositiveNumberSchema = (description: string) => Type.Number({ exclusiveMinimum: 0, description });
 const NullableTextSchema = (description: string) => Type.Union([Type.String({ minLength: 1, description }), Type.Null()]);
 const NullableDateSchema = Type.Union([
@@ -201,7 +216,7 @@ export default defineToolPlugin({
     tool({
       name: "coffee_log_brew",
       label: "Log Coffee Brew",
-      description: "Record a brew using an explicit bag_id or the selected context. Never guesses a bag.",
+      description: "Record a brew using an explicit bag_id or selected context. Capture structured taste, body, milk, and latte-art feedback when supplied. Inferences are allowed only when explicitly identified in provenance with a correction-friendly note; never guess a bag.",
       parameters: Type.Object({
         bag_id: Type.Optional(BagIdSchema),
         context: Type.Optional(ContextSchema),
@@ -215,6 +230,11 @@ export default defineToolPlugin({
         brew_time_seconds: Type.Optional(PositiveNumberSchema("Total brew or shot time in seconds.")),
         water_temp_c: Type.Optional(PositiveNumberSchema("Water temperature in Celsius.")),
         rating: Type.Optional(RatingSchema),
+        taste_balance: Type.Optional(TasteBalanceSchema),
+        body_level: Type.Optional(BodyLevelSchema),
+        milk_texture: Type.Optional(MilkTextureSchema),
+        art_rating: Type.Optional(RatingSchema),
+        provenance: Type.Optional(ProvenanceSchema),
         notes: Type.Optional(Type.String({ minLength: 1 })),
       }, { additionalProperties: false }),
       execute: (params, config, context) => withRepository(context, config.timezone, (repository) => repository.logBrew(params)),
@@ -236,6 +256,11 @@ export default defineToolPlugin({
         brew_time_seconds: Type.Optional(NullablePositiveSchema("Brew time; null clears it.")),
         water_temp_c: Type.Optional(NullablePositiveSchema("Water temperature; null clears it.")),
         rating: Type.Optional(NullableRatingSchema),
+        taste_balance: Type.Optional(Type.Union([TasteBalanceSchema, Type.Null()])),
+        body_level: Type.Optional(Type.Union([BodyLevelSchema, Type.Null()])),
+        milk_texture: Type.Optional(Type.Union([MilkTextureSchema, Type.Null()])),
+        art_rating: Type.Optional(NullableRatingSchema),
+        provenance: Type.Optional(ProvenanceSchema),
         notes: Type.Optional(NullableTextSchema("Notes; null clears them.")),
       }, { additionalProperties: false }),
       execute: ({ brew_id, ...params }, config, context) => withRepository(context, config.timezone, (repository) => repository.updateBrew(brew_id, params)),

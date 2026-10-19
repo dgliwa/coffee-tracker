@@ -13,6 +13,15 @@ export const DRINK_TYPES = [
   "other",
 ] as const;
 export type DrinkType = (typeof DRINK_TYPES)[number];
+export const TASTE_BALANCES = ["sour", "balanced", "bitter", "mixed"] as const;
+export const BODY_LEVELS = ["thin", "good", "heavy"] as const;
+export const MILK_TEXTURES = ["thin", "good", "thick"] as const;
+export const PROVENANCE_KINDS = ["reported", "approximate", "inferred"] as const;
+export type TasteBalance = (typeof TASTE_BALANCES)[number];
+export type BodyLevel = (typeof BODY_LEVELS)[number];
+export type MilkTexture = (typeof MILK_TEXTURES)[number];
+export type ProvenanceKind = (typeof PROVENANCE_KINDS)[number];
+export type BrewProvenance = Record<string, { kind: ProvenanceKind; note?: string }>;
 
 export interface Coffee {
   id: number;
@@ -54,6 +63,11 @@ export interface Brew {
   brew_time_seconds: number | null;
   water_temp_c: number | null;
   rating: number | null;
+  taste_balance: TasteBalance | null;
+  body_level: BodyLevel | null;
+  milk_texture: MilkTexture | null;
+  art_rating: number | null;
+  provenance: BrewProvenance;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -160,6 +174,11 @@ export interface LogBrewInput {
   brew_time_seconds?: number;
   water_temp_c?: number;
   rating?: number;
+  taste_balance?: TasteBalance;
+  body_level?: BodyLevel;
+  milk_texture?: MilkTexture;
+  art_rating?: number;
+  provenance?: BrewProvenance;
   notes?: string;
 }
 
@@ -175,6 +194,11 @@ export interface UpdateBrewInput {
   brew_time_seconds?: number | null;
   water_temp_c?: number | null;
   rating?: number | null;
+  taste_balance?: TasteBalance | null;
+  body_level?: BodyLevel | null;
+  milk_texture?: MilkTexture | null;
+  art_rating?: number | null;
+  provenance?: BrewProvenance;
   notes?: string | null;
 }
 
@@ -271,6 +295,22 @@ export function nullableRating(value: undefined): undefined;
 export function nullableRating(value: number | null | undefined): number | null | undefined {
   if (value === undefined || value === null) return value;
   return validateRating(value);
+}
+
+export function validateProvenance(value: BrewProvenance | undefined): BrewProvenance {
+  if (!value) return {};
+  const result: BrewProvenance = {};
+  for (const [field, entry] of Object.entries(value)) {
+    const normalizedField = requireNonBlank(field, "provenance field");
+    if (!PROVENANCE_KINDS.includes(entry.kind)) {
+      throw new CoffeeValidationError(`invalid provenance kind for ${normalizedField}`);
+    }
+    result[normalizedField] = {
+      kind: entry.kind,
+      ...(entry.note ? { note: requireNonBlank(entry.note, `provenance note for ${normalizedField}`) } : {}),
+    };
+  }
+  return result;
 }
 
 export function validateLimit(value: number | undefined, defaultValue: number): number {

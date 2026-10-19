@@ -13,6 +13,7 @@ import {
   type BrewFilters,
   type BrewWithBag,
   type BrewPhoto,
+  type BrewProvenance,
   type Coffee,
   CoffeeValidationError,
   type LogBrewInput,
@@ -30,12 +31,14 @@ import {
   requireNonBlank,
   validateLimit,
   validatePositive,
+  validateProvenance,
   validateRating,
 } from "./domain.js";
 
 const BREW_COLUMNS = [
   "id", "bag_id", "timestamp", "drink_type", "dose_g", "yield_g", "water_g",
   "grind_setting", "grinder", "brew_time_seconds", "water_temp_c", "rating",
+  "taste_balance", "body_level", "milk_texture", "art_rating", "provenance_json",
   "notes", "created_at", "updated_at",
 ] as const;
 
@@ -171,6 +174,13 @@ const MIGRATIONS = [
     );
     CREATE INDEX idx_brew_photos_brew_id ON brew_photos(brew_id, id DESC);
     CREATE INDEX idx_brew_photos_captured_at ON brew_photos(captured_at DESC, id DESC);
+  `,
+  `
+    ALTER TABLE brews ADD COLUMN taste_balance TEXT CHECK(taste_balance IS NULL OR taste_balance IN ('sour', 'balanced', 'bitter', 'mixed'));
+    ALTER TABLE brews ADD COLUMN body_level TEXT CHECK(body_level IS NULL OR body_level IN ('thin', 'good', 'heavy'));
+    ALTER TABLE brews ADD COLUMN milk_texture TEXT CHECK(milk_texture IS NULL OR milk_texture IN ('thin', 'good', 'thick'));
+    ALTER TABLE brews ADD COLUMN art_rating INTEGER CHECK(art_rating IS NULL OR art_rating BETWEEN 1 AND 5);
+    ALTER TABLE brews ADD COLUMN provenance_json TEXT NOT NULL DEFAULT '{}';
   `,
 ];
 
@@ -427,7 +437,7 @@ export class CoffeeRepository {
   logBrew(input: LogBrewInput): BrewWithBag {
     let bagId = input.bag_id ?? input.bean_id;
     if (input.bag_id !== undefined && input.bean_id !== undefined && input.bag_id !== input.bean_id) {
-      throw new CoffeeValidationError("bag_id and legacy bean_id must match when both are supplied");
+      throw new CoffeeValidationError("bag_id and legacy bean_id must match when both supplied");
     }
     if (bagId === undefined && input.context !== undefined) {
       const current = this.getCurrentBean(input.context);
@@ -440,8 +450,9 @@ export class CoffeeRepository {
     const result = this.db.prepare(`
       INSERT INTO brews(
         bag_id, timestamp, drink_type, dose_g, yield_g, water_g, grind_setting,
-        grinder, brew_time_seconds, water_temp_c, rating, notes, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        grinder, brew_time_seconds, water_temp_c, rating, taste_balance, body_level,
+        milk_texture, art_rating, provenance_json, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       bagId,
       normalizeTimestamp(input.timestamp),
@@ -454,6 +465,11 @@ export class CoffeeRepository {
       validatePositive(input.brew_time_seconds, "brew_time_seconds"),
       validatePositive(input.water_temp_c, "water_temp_c"),
       validateRating(input.rating),
+      input.taste_balance ?? null,
+      input.body_level ?? null,
+      input.milk_texture ?? null,
+      validateRating(input.art_rating),
+      JSON.stringify(validateProvenance(input.provenance)),
       optionalText(input.notes, "notes"),
       now,
       now,
@@ -467,9 +483,9 @@ export class CoffeeRepository {
     const now = new Date().toISOString();
     this.db.prepare(`
       UPDATE brews SET
-        bag_id = ?, timestamp = ?, drink_type = ?, dose_g = ?, yield_g = ?, water_g = ?,
-        grind_setting = ?, grinder = ?, brew_time_seconds = ?, water_temp_c = ?, rating = ?,
-        notes = ?, updated_at = ?
+        bag_id = ?, timestamp = ?, drink_type = ?, dose_g = ?, yield_g = ?, water_g = ?, grind_setting = ?,
+        grinder = ?, brew_time_seconds = ?, water_temp_c = ?, rating = ?, taste_balance = ?, body_level = ?,
+        milk_texture = ?, art_rating = ?, provenance_json = ?, notes = ?, updated_at = ?
       WHERE id = ?
     `).run(
       input.bag_id ?? current.bag_id,
@@ -483,6 +499,11 @@ export class CoffeeRepository {
       input.brew_time_seconds === undefined ? current.brew_time_seconds : nullablePositive(input.brew_time_seconds, "brew_time_seconds"),
       input.water_temp_c === undefined ? current.water_temp_c : nullablePositive(input.water_temp_c, "water_temp_c"),
       input.rating === undefined ? current.rating : nullableRating(input.rating),
+      input.taste_balance === undefined ? current.taste_balance : input.taste_balance,
+      input.body_level === undefined ? current.body_level : input.body_level,
+      input.milk_texture === undefined ? current.milk_texture : input.milk_texture,
+      input.art_rating === undefined ? current.art_rating : nullableRating(input.art_rating),
+      JSON.stringify(input.provenance === undefined ? current.provenance : validateProvenance(input.provenance)),
       input.notes === undefined ? current.notes : nullableText(input.notes, "notes"),
       now,
       brewId,
@@ -598,12 +619,21 @@ export class CoffeeRepository {
     average_ratio: number | null;
     average_brew_time_seconds: number | null;
     average_rating: number | null;
+    average_art_rating: number | null;
+    taste_counts: Record<string, number>;
+    body_counts: Record<string, number>;
+    milk_texture_counts: Record<string, number>;
+    provenance_counts: Record<string, number>;
     best_rated_brew: BrewWithBag | null;
   } {
     const brews = this.queryBrews({ ...filters, limit: filters.limit ?? 100 }, 100);
     const average = (values: number[]) => values.length
       ? Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2))
       : null;
+    const counts = (values: Array<string | null>): Record<string, number> => values.reduce<Record<string, number>>((result, value) => {
+      if (value) result[value] = (result[value] ?? 0) + 1;
+      return result;
+    }, {});
     const best = brews.filter((brew) => brew.rating !== null)
       .sort((left, right) => right.rating! - left.rating! || right.timestamp.localeCompare(left.timestamp))[0] ?? null;
     return {
@@ -613,6 +643,11 @@ export class CoffeeRepository {
       average_ratio: average(brews.flatMap((brew) => brew.brew_ratio === null ? [] : [brew.brew_ratio])),
       average_brew_time_seconds: average(brews.flatMap((brew) => brew.brew_time_seconds === null ? [] : [brew.brew_time_seconds])),
       average_rating: average(brews.flatMap((brew) => brew.rating === null ? [] : [brew.rating])),
+      average_art_rating: average(brews.flatMap((brew) => brew.art_rating === null ? [] : [brew.art_rating])),
+      taste_counts: counts(brews.map((brew) => brew.taste_balance)),
+      body_counts: counts(brews.map((brew) => brew.body_level)),
+      milk_texture_counts: counts(brews.map((brew) => brew.milk_texture)),
+      provenance_counts: counts(brews.flatMap((brew) => Object.values(brew.provenance).map(({ kind }) => kind))),
       best_rated_brew: best,
     };
   }
@@ -696,9 +731,13 @@ export class CoffeeRepository {
   }
 
   private mapJoinedBrew(row: JoinedBrewRow): BrewWithBag {
-    const brew = Object.fromEntries(BREW_COLUMNS.map((column) => [column, row[column]])) as unknown as Brew;
+    const record = Object.fromEntries(BREW_COLUMNS.map((column) => [column, row[column]]));
+    const { provenance_json: rawProvenance, ...brew } = record;
+    let provenance: BrewProvenance = {};
+    try { provenance = JSON.parse(String(rawProvenance ?? "{}")) as BrewProvenance; } catch { provenance = {}; }
     return {
-      ...brew,
+      ...(brew as unknown as Omit<Brew, "provenance">),
+      provenance,
       bag: {
         id: row.bag_id,
         coffee_id: row.bag_coffee_id,
