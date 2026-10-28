@@ -221,17 +221,36 @@ export class CoffeeRepository {
   private readonly db: DatabaseSync;
   readonly timeZone: string;
 
-  constructor(readonly databasePath: string, timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone) {
+  /** With `readOnly`, never creates, migrates, or writes; the schema must already be current. */
+  constructor(
+    readonly databasePath: string,
+    timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+    options: { readOnly?: boolean } = {},
+  ) {
     try {
       new Intl.DateTimeFormat("en-US", { timeZone }).format();
     } catch {
       throw new CoffeeValidationError(`invalid IANA timezone: ${timeZone}`);
     }
     this.timeZone = timeZone;
+    if (options.readOnly) {
+      this.db = new DatabaseSync(databasePath, { readOnly: true });
+      this.db.exec("PRAGMA busy_timeout = 5000;");
+      this.assertMigrated();
+      return;
+    }
     mkdirSync(dirname(databasePath), { recursive: true });
     this.db = new DatabaseSync(databasePath);
     this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;");
     this.migrate();
+  }
+
+  private assertMigrated(): void {
+    const { applied } = this.db.prepare("SELECT COUNT(*) AS applied FROM schema_migrations").get() as { applied: number };
+    if (Number(applied) !== MIGRATIONS.length) {
+      this.db.close();
+      throw new Error(`coffee-tracker schema is at ${applied}/${MIGRATIONS.length} migrations; open it with the plugin first`);
+    }
   }
 
   close(): void {
@@ -652,7 +671,7 @@ export class CoffeeRepository {
     };
   }
 
-  private getBrew(brewId: number): BrewWithBag {
+  getBrew(brewId: number): BrewWithBag {
     this.validateId(brewId, "brew_id");
     const brew = this.queryJoined("br.id = ?", [brewId], 1)[0];
     if (!brew) throw new CoffeeValidationError(`unknown brew ID: ${brewId}`);
