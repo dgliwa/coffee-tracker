@@ -92,6 +92,19 @@ openclaw plugins install --link .
 openclaw plugins reload coffee-tracker
 ```
 
+## Publication projection
+
+`openclaw-blog-publisher` reads one brew at a time through a read-only CLI:
+
+```bash
+npm run build
+node dist/publication-cli.js --db <state>/plugins/coffee-tracker/coffee-tracker.sqlite get <brew-id> [--include rating,artRating,notes]
+```
+
+It prints one projection (version 1) as JSON: public brew and coffee fields, opt-in fields only when named in `--include`, and the brew's managed photos in capture order. Grinder, grind setting, bag details, coffee and bag notes, provenance, and original filenames are never projected. The database is opened read-only and must already be fully migrated.
+
+Exit codes: `0` success, `1` failure, `2` usage or missing database, `3` unknown brew.
+
 ## License
 
 [MIT](LICENSE) © 2026 Derek Gliwa
